@@ -1,0 +1,605 @@
+---
+title: "Analisis Pergerakan Masyarakat Indonesia "
+author: "Ginanjar Utama"
+date: "29/9/2021"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(dplyr, DBI, ggplot2, hrbrthemes, lubridate, janitor, httr, 
+               sparklyr, dbplot, here)
+
+theme_set(hrbrthemes::theme_ipsum())
+
+
+library(sf)
+library(glue)
+library(scales)
+library(leaflet)
+library(readr)
+library(tsibble)
+library(plotly)
+library(feasts)
+```
+
+
+```{r}
+# library(sparklyr) ## Already loaded
+
+## Give our Spark instance a bit more memory (default is 2 GB)
+config = spark_config()
+config$spark.executor.memory = "4G"
+
+Sys.setenv(JAVA_HOME = "C:/Program Files/Java/jre1.8.0_301") 
+
+## Instantiate a Spark connection
+sc = spark_connect(master = "local", config = config)
+```
+
+
+
+
+```{r}
+fbmobility = 
+  spark_read_csv(
+  sc,
+  name = "fbmobility",
+  path = here("data"),
+  memory = TRUE,
+  delimiter = ","
+  )
+```
+
+
+```{r}
+spark_web(sc)
+```
+
+```{r}
+fbmobility %>% 
+  mutate(ds = as.Date(ds)) %>%
+  ## Plot the data, executing an aggregation function (i.e. mean) inside Spark
+  dbplot_line(ds, mean(all_day_bing_tiles_visited_relative_change))
+```
+
+
+
+```{r}
+fbmobility %>% 
+  mutate(ds = as.Date(ds)) %>%
+  ## Plot the data, executing an aggregation function (i.e. mean) inside Spark
+  dbplot_line(ds, mean(all_day_ratio_single_tile_users))
+```
+
+
+```{r}
+idnfbmobility <- fbmobility %>%    collect()  %>%  mutate(ds = as.Date(ds))
+```
+
+
+##Load data & transform
+```{r}
+
+#fbdata <- read_delim("mobility/Facebook Mobility/IDN.csv", delim = ";")
+#idndata2020 <- fbdata %>% filter(ds < "2021-01-01") 
+
+#globalfbmobility <- read_tsv("movement-range-2021-09-18.txt")
+#idndata2021 <- globalfbmobility %>% filter(country == "IDN")
+
+#idnfbmobility <- rbind(idndata2020, idndata2021)
+
+#saveRDS(idnfbmobility, file="idnfbmobility.rds")
+
+#if spark not used
+#idnfbmobility <- readRDS(file="idnfbmobility.rds")
+
+
+```
+
+## transform
+```{r}
+idnfbmobility %<>% mutate(stayput = all_day_ratio_single_tile_users*100) %>% 
+  mutate(mvtchange = all_day_bing_tiles_visited_relative_change*100) 
+
+idn_sf_lvl2 <- readRDS(file="gadm36_IDN_2_sf.rds")
+
+#map_fbmobile <- idnfbmobility  %>%   left_join(idn_sf_lvl2, by = c("polygon_name" = "NAME_2"))
+map_fbmobile <- idnfbmobility  %>%   left_join(idn_sf_lvl2, by = c("polygon_id" = "GID_2")) 
+```
+
+
+
+Transformasi dan pengelompokan
+```{r}
+map_fbmobile <- map_fbmobile %>% mutate(Region = recode(NAME_1,
+  "Aceh" = "Sumatera",
+  "Sumatera Barat" = "Sumatera",
+  "Sumatera Selatan" = "Sumatera",
+  "Sumatera Utara" = "Sumatera",
+  "Bangka Belitung" = "Sumatera",
+  "Bengkulu" = "Sumatera",
+  "Jambi" = "Sumatera",
+  "Riau" = "Sumatera",
+  "Kepulauan Riau" = "Sumatera",
+  "Lampung" = "Sumatera",
+
+  "Banten" = "Jawa",
+  "Jakarta Raya" = "Jawa",
+  "Jawa Barat" = "Jawa",
+  "Jawa Tengah" = "Jawa",
+  "Jawa Timur" = "Jawa",
+  "Yogyakarta" = "Jawa",
+  
+  "Kalimantan Barat" = "Kalimantan",
+  "Kalimantan Selatan" = "Kalimantan",
+  "Kalimantan Tengah" = "Kalimantan",
+  "Kalimantan Timur" = "Kalimantan",
+  #"Kalimantan Utara" = "Kalimantan",  sourcenya tidak ada, GADM belum ada update
+
+  "Bali" = "Balnusra",
+  "Nusa Tenggara Barat" = "Balnusra",
+  "Nusa Tenggara Timur" = "Balnusra",
+  
+  
+  "Sulawesi Barat" = "Sulampua",
+  "Sulawesi Selatan" = "Sulampua",
+  "Sulawesi Tengah" = "Sulampua",
+  "Sulawesi Tenggara" = "Sulampua",
+  "Sulawesi Utara" = "Sulampua", 
+  "Gorontalo" = "Sulampua",
+  "Maluku" = "Sulampua",
+  "Maluku Utara" = "Sulampua",
+  "Papua" = "Sulampua",
+  "Papua Barat" = "Sulampua"
+
+     )
+  ) 
+```
+
+
+```{r}
+#duplicates(map_fbmobile, key = polygon_name, index = ds)
+
+fb_tsbl <-  as_tsibble(map_fbmobile, key = polygon_id, index = ds)
+```
+
+```{r}
+avgmobility <- fb_tsbl %>% 
+  select(ds, stayput, mvtchange) %>% 
+  summarise(avgstayput = mean(stayput), avgmvtchange = mean(mvtchange) )
+
+```
+
+
+
+```{r}
+
+autoplot(avgmobility, avgstayput) + theme_minimal() +
+  labs(title = "Average % of People Staying put ",
+       subtitle = "Indonesia",
+       y = "Stayy-put (%)")
+```
+
+```{r}
+avgmobility %>% slice_max(avgstayput, n=4)
+```
+
+```{r}
+avgmobility %>% filter(ds >= "2021-01-01") %>%  slice_max(avgstayput, n=4)
+```
+
+```{r}
+avgmobility %>% slice_min(avgstayput, n=4)
+```
+
+```{r}
+avgmobility %>% filter(ds >= "2021-01-01") %>%  slice_min(avgstayput, n=4)
+```
+
+
+```{r}
+
+autoplot(avgmobility, avgmvtchange) + theme_minimal() +
+  labs(title = "Average Change in Movement",
+       subtitle = "Indonesia",
+       y = "Mobility change (%)")
+```
+```{r}
+avgmobility %>% slice_max(avgmvtchange, n=4) %>% select(ds, avgmvtchange, avgstayput)
+```
+
+```{r}
+avgmobility %>% slice_min(avgmvtchange, n=4) %>% select(ds, avgmvtchange, avgstayput)
+```
+
+```{r}
+avgmobility %>% filter(ds >= "2021-01-01") %>% slice_min(avgmvtchange, n=4) %>% select(ds, avgmvtchange, avgstayput)
+```
+
+
+Scatter plot
+```{r}
+avgmobility %>%
+  ggplot(aes(x = avgstayput, y = avgmvtchange)) +
+  geom_point() +
+  theme(aspect.ratio = 1)
+```
+```{r}
+cor(avgmobility$avgstayput, avgmobility$avgmvtchange)
+```
+```{r}
+outlier <- avgmobility %>% filter(avgstayput < 21  &  avgmvtchange < -15)
+
+outlier
+```
+
+
+avgstayput max
+
+2020-04-26	31.53988	
+
+
+avgstayput max
+
+2021-07-11	27.51946	
+
+minimum 2020
+avgstayput
+2020-03-09	16.93019	
+
+avgstayput
+2021-05-13	18.00197	
+
+```{r}
+selectedData <- fb_tsbl[fb_tsbl$ds == "2021-05-13", ]
+idn_sf_lvl2$stayput <- selectedData$stayput[match(idn_sf_lvl2$GID_2, selectedData$polygon_id)]
+pal1 <- colorNumeric(palette = "RdYlBu", domain = fb_tsbl$stayput)
+
+idn_sf_lvl2$Lblstayput <- paste0(
+  "<b>", idn_sf_lvl2$NAME_2,"</b><br>", 
+   idn_sf_lvl2$stayput)
+
+leaflet(idn_sf_lvl2)  %>% 
+      addProviderTiles(providers$CartoDB.Positron) %>%
+      addPolygons(
+        layerId = ~NAME_2,
+        label = ~lapply(Lblstayput, htmltools::HTML),
+        labelOptions = labelOptions(
+          style = list(
+            "font-size"="13px",
+            "background-color"="black",
+            "color"="white"
+          )
+        ),
+        weight = 2,
+        color = "white",
+        fillOpacity = .8,
+        fillColor = ~pal1(stayput),
+        highlight = highlightOptions(
+          weight = 5,
+          color = "black",
+          bringToFront = TRUE,
+          sendToBack = TRUE,
+          opacity = 0.8)
+      ) %>% 
+      # need to specify the leaflet::addLegend function here to avoid ambiguity with the xts::addLegend function
+     leaflet::addLegend( pal = pal1,
+                        values = fb_tsbl$stayput,
+                        opacity = 1,
+                        title = "Stay-put percentage",
+                        position = "bottomleft") %>%
+      fitBounds(95.686211, 6.370783, 141.972824, -11.089036)
+```
+
+
+
+	
+
+
+
+avgmvtchange
+2021-04-12	4.978027		
+
+avgmvtchange
+
+2020-04-26	-37.06304	
+
+avgmvtchange
+2021-07-20	-19.86335	
+
+```{r}
+
+selectedData <- fb_tsbl[fb_tsbl$ds == "2021-07-20", ]
+idn_sf_lvl2$mvtchange <- selectedData$mvtchange[match(idn_sf_lvl2$GID_2, selectedData$polygon_id)]
+
+pal2 <- colorNumeric(palette = "viridis", domain = fb_tsbl$mvtchange)
+ 
+
+idn_sf_lvl2$Lblmvtchg <- paste0(
+  "<b>", idn_sf_lvl2$NAME_2,"</b><br>", 
+  idn_sf_lvl2$mvtchange)
+
+leaflet(idn_sf_lvl2)  %>% 
+      addProviderTiles(providers$CartoDB.Positron) %>%
+      addPolygons(
+        layerId = ~NAME_2,
+        label = ~lapply(Lblmvtchg, htmltools::HTML),
+        labelOptions = labelOptions(
+          style = list(
+            "font-size"="13px",
+            "background-color"="black",
+            "color"="white"
+          )
+        ),
+        weight = 2,
+        color = "white",
+        fillOpacity = .8,
+        fillColor = ~pal2(mvtchange),
+        highlight = highlightOptions(
+          weight = 5,
+          color = "black",
+          bringToFront = TRUE,
+          sendToBack = TRUE,
+          opacity = 0.8)
+      ) %>% 
+      # need to specify the leaflet::addLegend function here to avoid ambiguity with the xts::addLegend function
+          leaflet::addLegend( pal = pal2,
+                          values = fb_tsbl$mvtchange,
+                          opacity = 1,
+                          title = "Relative mobility change %",
+                          position = "bottomleft")   %>%
+        fitBounds(95.686211, 6.370783, 141.972824, -11.089036)  
+```
+
+
+
+```{r}
+p1 <- avgmobility %>% gg_season(avgmvtchange, period = "week") +
+  theme(legend.position = "bottomright") + 
+  labs(y="(%)", title="Weekly relative mobility change")
+
+ggplotly(p1)
+```
+
+```{r}
+p2 <- avgmobility %>% gg_season(avgmvtchange, period = "month") +
+  theme(legend.position = "bottomright") + 
+  labs(y="(%)", title="Monthly relative mobility change")
+
+ggplotly(p2)
+```
+
+```{r}
+p3 <- avgmobility %>%  gg_season(avgstayput, period = "week") +
+  theme(legend.position = "bottomright") +
+  labs(y="(%)", title="Weekly staying put percentage")
+
+ggplotly(p3)
+
+```
+
+```{r}
+p4 <- avgmobility %>% gg_season(avgstayput, period = "month") +
+  theme(legend.position = "bottomright") + 
+  labs(y="(%)", title="Monthly staying put percentage")
+
+ggplotly(p4)
+```
+
+```{r}
+region_mobility <- fb_tsbl %>% 
+  select(ds, stayput, mvtchange, Region) %>% 
+  group_by(Region) %>%
+  summarise(avgmvtchange = mean(mvtchange), avgstayput = mean(stayput)) 
+```
+
+
+```{r}
+autoplot(region_mobility, avgmvtchange) +
+  labs(y = "(%)",
+       title = "Relative mobility change per region")
+```
+
+
+```{r}
+autoplot(region_mobility, avgstayput) + 
+  labs(y = "(%)",
+       title = "Stay-put percentage per region")
+```
+```{r}
+as.data.frame(region_mobility) %>% group_by(Region) %>%  summarise(meanstayput = mean(avgstayput))
+```
+
+```{r}
+as.data.frame(region_mobility) %>% group_by(Region) %>%  summarise(meanmvtchange = mean(avgmvtchange))
+```
+
+
+```{r}
+prov_mobility <- fb_tsbl %>% 
+  select(ds, stayput, mvtchange, Region, NAME_1) %>% 
+  group_by(NAME_1, Region) %>%
+  summarise(avgmvtchange = mean(mvtchange), avgstayput = mean(stayput)) 
+
+prov_mobility
+```
+
+
+```{r}
+p5 <- autoplot(prov_mobility, avgstayput) + theme_classic() +
+  labs(y="%", title="Average staying put percentage per province") + facet_wrap(~Region, ncol=1) + guides(col=FALSE)
+
+ggplotly(p5)
+```
+
+```{r}
+p6 <- autoplot(prov_mobility, avgmvtchange) + theme_classic() +
+  labs(y="%", title="Average relative mobility change per province") + facet_wrap(~Region, ncol=1) + guides(col=FALSE)
+
+ggplotly(p6)
+```
+
+
+```{r}
+stayput_features <- fb_tsbl %>%   select(ds, polygon_id, polygon_name, stayput, mvtchange, NAME_1) %>% 
+  features(stayput, feature_set(pkgs = "feasts"))
+stayput_features
+```
+
+
+```{r}
+library(broom)
+pcs <- stayput_features %>%
+  select(-polygon_id, -zero_start_prop, -zero_end_prop, -nsdiffs, -lb_pvalue, -zero_run_mean, -pp_pvalue, -bp_pvalue) %>%
+  prcomp(scale = TRUE) %>%
+  augment(stayput_features)
+pcs %>%
+  ggplot(aes(x = .fittedPC1, y = .fittedPC2)) +
+  geom_point() +
+  theme(aspect.ratio = 1)
+```
+
+
+```{r}
+outliers1 <- pcs %>%
+  filter(.fittedPC1 < -10) %>%
+  select(polygon_id, .fittedPC1, .fittedPC2)
+outliers1
+```
+
+```{r}
+outliers2 <- pcs %>%
+  filter(.fittedPC2 > 7) %>%
+  select(polygon_id, .fittedPC1, .fittedPC2)
+outliers2
+```
+
+```{r}
+outliersall <- rbind(outliers1,outliers2)
+
+fb_tsbl_out <- fb_tsbl %>% filter(polygon_id %in% outliersall$polygon_id)  
+
+#autoplot(fb_tsbl_out, stayput)  +  aes(colour=polygon_name) + theme_classic()
+
+ggplot(fb_tsbl_out) + aes(x = ds, y = stayput, group=polygon_name, colour=polygon_name) + geom_path()  +
+  labs(y="%", title="Outliers for staying put")
+
+
+```
+
+
+```{r}
+mvtchange_features <- fb_tsbl %>%   select(ds, polygon_id, polygon_name, stayput, mvtchange, Region, NAME_1) %>% 
+  features(mvtchange, feature_set(pkgs = "feasts"))
+mvtchange_features
+```
+
+
+```{r}
+pcs2 <- mvtchange_features %>%
+  select(-polygon_id, -zero_start_prop, -zero_end_prop, -nsdiffs, -lb_pvalue, -zero_run_mean, -pp_pvalue, -bp_pvalue) %>%
+  prcomp(scale = TRUE) %>%
+  augment(mvtchange_features)
+pcs2 %>%
+  ggplot(aes(x = .fittedPC1, y = .fittedPC2)) +
+  geom_point() +
+  theme(aspect.ratio = 1)
+```
+
+
+```{r}
+outliers3 <- pcs2 %>%
+  filter(.fittedPC1 < -12  & .fittedPC2 < -5) %>%
+  select(polygon_id, .fittedPC1, .fittedPC2)
+outliers3
+```
+
+```{r}
+outliers4 <- pcs2 %>%
+  filter(.fittedPC1 < -10  & .fittedPC2 > 5) %>%
+  select(polygon_id, .fittedPC1, .fittedPC2)
+outliers4
+```
+
+```{r}
+outliers5 <- pcs2 %>%
+  filter( .fittedPC2 > 10) %>%
+  select(polygon_id, .fittedPC1, .fittedPC2)
+outliers5
+```
+
+
+```{r}
+outliersall2 <- rbind(outliers3,outliers4, outliers5)
+
+fb_tsbl_out2 <- fb_tsbl %>% filter(polygon_id %in% outliersall2$polygon_id)  
+
+autoplot(fb_tsbl_out2, mvtchange)  +  aes(colour=polygon_name) + theme_classic()
+
+ggplot(fb_tsbl_out2) + aes(x = ds, y = mvtchange, group=polygon_name, colour=polygon_name) + geom_path()  +
+  labs(y="%", title="Outliers for relative mobility change")
+
+```
+
+
+```{r}
+bypolygon <- idnfbmobility %>% select(polygon_id,  polygon_name, stayput, mvtchange) %>% 
+   filter(!polygon_id %in% outliersall$polygon_id) %>%  filter(!polygon_id %in% outliersall2$polygon_id) %>% 
+  group_by(polygon_name) %>% 
+  summarise(avgstayput = mean(stayput), avgmvtchange = mean(mvtchange)) 
+
+bypolygon 
+```
+
+```{r}
+bypolygon %>% slice_max(avgstayput, n=2)
+```
+
+```{r}
+bypolygon %>% slice_min(avgstayput, n=2)
+```
+
+```{r}
+bypolygon %>% slice_max(avgmvtchange, n=2) %>% select(polygon_name, avgmvtchange, avgstayput)
+```
+
+
+```{r}
+bypolygon %>% slice_min(avgmvtchange, n=2) %>% select(polygon_name, avgmvtchange, avgstayput)
+```
+
+```{r}
+top_stayput <- fb_tsbl %>% filter(polygon_name %in% c("Paniai", "Jakarta Selatan", "Morowali", "Pariaman"))
+
+autoplot(top_stayput, stayput) + aes(color=polygon_name)
+```
+
+```{r}
+top_mvtchange <- fb_tsbl %>% filter(polygon_name %in% c("Maluku Barat Daya", "Pohuwato", "Jakarta Selatan", "Jakarta Pusat"))
+
+autoplot(top_mvtchange, mvtchange) + aes(color=polygon_name)
+```
+
+
+
+
+
+
+```{r, eval=FALSE}
+## Remove tables from the Spark connection
+dbRemoveTable(sc, "fbmobility") 
+## Remove the corresponding R objects (i.e. references)
+rm(fbmobility) 
+```
+
+
+```{r, eval=FALSE}
+spark_disconnect(sc)
+```
+

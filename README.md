@@ -1,5 +1,3 @@
-# hello
+# Peta Pergerakan Masyarakan Indonesia periode COVID-19 berdasarkan data FB mobility
 
-here we go yeay
-
-alhamdulillah
+Made using leaflet, sf, shiny
